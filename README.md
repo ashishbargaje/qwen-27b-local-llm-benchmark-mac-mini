@@ -283,35 +283,7 @@ The interesting target is not simply loading the model. The target is a configur
 
 ---
 
-## 10. Repository Contents
-
-```text
-.
-├── README.md
-├── test-results-analysis.md
-├── linkedin-post.md
-├── file_llm.py
-├── helper.py
-├── llm_input.txt
-├── llm_output.txt
-├── llm_logs.txt
-└── images/
-```
-
-Suggested contents for `images/`:
-
-```text
-images/
-├── context-64k.png
-├── memory-before.png
-├── memory-peak.png
-├── memory-after.png
-└── image-test-composite.png
-```
-
----
-
-## 11. Reproducibility
+## 10. Reproducibility
 
 The repository keeps the important experimental artefacts together:
 
@@ -338,7 +310,7 @@ Small runtime changes can affect memory and throughput.
 
 ---
 
-## 12. Scope and Limitations
+## 11. Scope and Limitations
 
 This is a **practical experiment**, not a formal benchmark suite.
 
