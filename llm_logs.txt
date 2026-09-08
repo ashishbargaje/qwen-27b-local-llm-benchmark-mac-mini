@@ -1,6 +1,6 @@
 
-                Generated tokens: 5540
-                Evaluation duration: 779.63 seconds
-                Tokens per second: 7.11
-                Prompt tokens: 3220
+                Generated tokens: 5388
+                Evaluation duration: 819.60 seconds
+                Tokens per second: 6.57
+                Prompt tokens: 12634
                 

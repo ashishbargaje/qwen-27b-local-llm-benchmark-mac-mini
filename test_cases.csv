@@ -1,0 +1,51 @@
+ID,Scenario,Priority,Test Type,Expected Result
+TC-01,Duplicate ExpenseApproved Kafka event for same approved expense,P0,Event Integration,Consumer creates exactly one ERP external transaction and one EXPORTED transition in DB and audit log
+TC-02,Duplicate Kafka event with different message IDs but same expense,P0,Event Integration,Stable business idempotency key prevents second ERP external transaction
+TC-03,Out-of-order events approved then rejected then stale approved,P0,Event State Machine,Consumer reads current DB state and ignores stale approved event with no export after rejection
+TC-04,Out-of-order events approved then exported then stale approved,P0,Event State Machine,Consumer does not export again and audit log shows one EXPORTED transition
+TC-05,ERP export request times out after ERP accepted then retried with same idempotency key,P0,ERP Integration,Retry returns same ERP external transaction ID and no second external transaction is created
+TC-06,ERP timeout is ambiguous and consumer queries ERP by idempotency key before retry,P0,ERP Integration,Consumer reconciles existing transaction and does not create duplicate ERP record
+TC-07,Network failure after ERP accepted but response lost before client receives it,P0,ERP Integration,Retry with stable key returns existing external transaction ID and no duplicate ERP transaction
+TC-08,ERP returns 500 repeatedly during export,P1,ERP Integration,Expense remains export pending with bounded retries and no premature EXPORTED status
+TC-09,ERP returns 429 rate limit repeatedly,P1,ERP Integration,Consumer uses bounded backoff and concurrency limits without retry storm
+TC-10,ERP outage for six hours while approved expenses queue,P1,ERP Resilience,Queue remains bounded and recovery produces no lost or duplicate ERP exports
+TC-11,ERP returns success but missing external transaction ID,P1,ERP Integration,Consumer marks expense as export pending and reconciles before marking EXPORTED
+TC-12,Two ERP requests use same idempotency key for same expense,P0,ERP Idempotency,ERP returns same external transaction ID and only one external transaction exists
+TC-13,ERP request uses unstable key such as Kafka message ID for same expense,P0,ERP Idempotency,System detects duplicate external transaction and audit reconciliation flags the defect
+TC-14,Consumer crashes after ERP success but before durable DB update,P1,Kafka Resilience,Replay does not create second ERP external transaction and DB reaches one correct EXPORTED state
+TC-15,Consumer acknowledges Kafka offset before DB commit then crashes,P1,Kafka Resilience,Replay is idempotent and no duplicate ERP export occurs
+TC-16,Kafka partition leader failure and consumer rebalance,P1,Kafka Resilience,Consumers resume from committed offsets with no lost or duplicate messages and no duplicate ERP export
+TC-17,Malformed Kafka event with missing expense ID or invalid amount,P1,Kafka Validation,Consumer rejects or routes event to dead-letter without crashing or exporting bad data
+TC-18,Replay of previously processed approved events,P1,Kafka Replay,Consumer recognizes already exported state and does not create second ERP external transaction
+TC-19,Manager attempts to approve expense after rejection,P0,State Machine API,Approval is rejected and expense remains rejected with no ERP export
+TC-20,Two managers approve same expense simultaneously,P0,Concurrency API,Only one approval transition succeeds and the other is rejected or audited as denied
+TC-21,Approval and rejection happen concurrently for same expense,P0,Concurrency State Machine,Final state is exactly one of approved or rejected with no both states
+TC-22,Employee attempts to approve own expense,P0,Security API UI,Action is denied and audit log records denied self-approval attempt
+TC-23,Expense above 5000 requires two-level approval,P0,Functional API,No ERP export occurs until both required approvals are recorded
+TC-24,Expense exactly at 5000 threshold boundary,P0,Functional API,Threshold logic applies configured rule and no export occurs before required approvals
+TC-25,Rejection after approval is attempted,P0,State Machine API,Rejection is blocked or audited as invalid and export state remains consistent
+TC-26,Export request for expense not fully approved,P0,API State Machine,Export is rejected and no ERP call is made
+TC-27,Export request for rejected expense,P0,API State Machine,Export is rejected and no ERP transaction is created
+TC-28,Repeated export API request for same approved expense,P0,API Idempotency,Repeated request uses stable key and creates only one ERP external transaction
+TC-29,Unauthorized user attempts to export expense,P0,Security API,Export is denied and audit log records unauthorized attempt
+TC-30,User A attempts to approve expense B by changing URL,P0,Security IDOR,Authorization check denies action and expense B state is unchanged
+TC-31,User A attempts to export expense B without permission,P0,Security IDOR,Export is denied and no ERP transaction is created
+TC-32,Expired or invalid JWT token used for approval or export,P0,Security Auth,Request is rejected and no state transition occurs
+TC-33,Anonymous GET request to private receipt file in S3,P0,Security S3,Request returns 403 and receipt file is not publicly accessible
+TC-34,Presigned receipt URL expires before download,P0,Security S3,Expired URL is denied and no unauthorized access occurs
+TC-35,Presigned receipt URL is role-limited,P0,Security S3,Only allowed role can access file and access is logged
+TC-36,Receipt download by authorized user,P1,Security Audit,Download is logged with actor timestamp and file identifier
+TC-37,OCR returns low-confidence amount vendor or date,P1,OCR Functional,Expense is routed to manual review and no auto-export occurs with unvalidated data
+TC-38,OCR returns invalid or corrupted receipt data,P1,OCR Functional,Expense remains in review state and no ERP export occurs
+TC-39,Duplicate expense submission using same receipt hash vendor date and amount,P0,Functional DB,Second submission is blocked or flagged as duplicate and no duplicate export occurs
+TC-40,Valid distinct expense with similar vendor date and amount is not blocked,P1,Functional DB,Duplicate detection does not create false positive and expense can proceed
+TC-41,Two employees submit same receipt simultaneously,P0,Concurrency DB,Second insert is rejected or flagged as duplicate and no duplicate export occurs
+TC-42,Exchange rate lookup uses transaction date not current date,P0,Data API,Amount and tax are computed using rate applicable to transaction date
+TC-43,Exchange rate source outage during expense creation,P1,Data Resilience,System uses safe fallback or blocks export until valid rate is available
+TC-44,Transaction date crosses timezone or currency boundary,P1,Data API,Correct date and currency conversion are used for amount and tax
+TC-45,Audit log records every state transition with actor timestamp event and ERP ID,P0,Audit DB,Every transition is traceable and duplicate ERP export can be detected
+TC-46,Audit reconciliation detects two ERP external transaction IDs for same expense,P0,Audit Reconciliation,System flags duplicate export immediately and prevents release if unresolved
+TC-47,10000 concurrent users submit approve and export expenses,P1,Performance Load,API p95 remains under 30 seconds and Kafka lag stays within SLO
+TC-48,Approval storm with many managers approving and rejecting at same time,P1,Performance Concurrency,No deadlock occurs and each expense reaches one authoritative state
+TC-49,ERP export throughput under normal load with 1000 approved expenses,P1,Performance ERP,Export throughput meets business requirement without unbounded queue growth
+TC-50,Failed DB update during export leaves inconsistent status,P1,Resilience DB,System recovers to correct state and audit log records failure without duplicate ERP export

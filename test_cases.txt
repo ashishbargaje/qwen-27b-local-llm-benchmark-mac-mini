@@ -1,0 +1,52 @@
+| ID | Scenario | Priority | Test Type | Expected Result |
+|---|---|---|---|---|
+| TC-01 | Duplicate `ExpenseApproved` Kafka event for the same expense | P0 | Kafka / ERP / DB / Audit | Consumer creates exactly one ERP external transaction and exactly one `EXPORTED` transition; audit log records one export. |
+| TC-02 | Same logical `ExpenseApproved` event delivered twice with different Kafka message IDs | P0 | Kafka / ERP / Idempotency | Consumer uses a stable business idempotency key, ERP returns the same external transaction ID, and no second ERP transaction is created. |
+| TC-03 | Stale `ExpenseApproved` event arrives after `ExpenseRejected` | P0 | Kafka / DB / State Machine | Consumer reads the current DB state, ignores the stale event, performs no ERP export, and logs the ignored invalid transition. |
+| TC-04 | Stale `ExpenseApproved` event arrives after expense is already `EXPORTED` | P1 | Kafka / DB / State Machine | Consumer does not re-export; DB remains `EXPORTED` with exactly one ERP external transaction ID. |
+| TC-05 | Consumer crashes after ERP success but before durable DB update | P0 | Kafka / DB / Resilience | Replay does not create a second ERP external transaction; DB eventually reaches one correct `EXPORTED` state. |
+| TC-06 | Consumer acknowledges Kafka before durable DB commit | P0 | Kafka / DB / Resilience | No split-brain state occurs; either ack is deferred until DB is durable, or replay is fully idempotent. |
+| TC-07 | Malformed or “poison” Kafka event, such as missing expense ID, invalid amount, invalid currency, or negative value | P1 | Kafka / Validation / Resilience | Event is rejected or routed to dead-letter; consumer does not crash and does not export invalid data. |
+| TC-08 | Kafka partition failure or consumer rebalance | P1 | Kafka / Resilience | Consumers resume from committed offsets; no lost or duplicate ERP exports; Kafka lag recovers within SLO. |
+| TC-09 | Replay of previously processed Kafka events | P1 | Kafka / Idempotency | Consumer recognizes already-exported state and does not create a second ERP external transaction. |
+| TC-10 | ERP returns 500 repeatedly during export | P1 | ERP / Retry / Resilience | Expense remains `IN_EXPORT` or `EXPORT_PENDING`; retries are bounded, use stable key, and do not mark expense `EXPORTED` prematurely. |
+| TC-11 | ERP returns 429 rate-limit response | P1 | ERP / Retry / Performance | Consumer backs off, respects retry limits or `Retry-After` behavior, avoids a retry storm, and eventually succeeds or moves to dead-letter. |
+| TC-12 | ERP export request times out after ERP has accepted the request | P0 | ERP / Idempotency | Retry with the same stable idempotency key returns the same ERP external transaction ID; only one external transaction exists. |
+| TC-13 | Network/proxy failure drops ERP response after ERP accepted the request | P0 | ERP / Resilience / Idempotency | System queries ERP by stable idempotency key and reconciles state; no duplicate external transaction is created. |
+| TC-14 | ERP returns success but response is missing the external transaction ID | P1 | ERP / Data Validation | Expense is not prematurely marked `EXPORTED`; consumer reconciles until a valid ERP external transaction ID is stored. |
+| TC-15 | ERP outage for several hours | P1 | ERP / Resilience | Export queue remains bounded; no exports are lost; after recovery, reconciliation produces exactly one ERP external transaction per approved expense. |
+| TC-16 | Two ERP export requests use the same idempotency key for the same expense | P0 | ERP / Idempotency | ERP returns the same external transaction ID for both requests; only one external transaction is created. |
+| TC-17 | Retry logic generates a new idempotency key for the same expense | P0 | ERP / Idempotency | Duplicate ERP export is prevented or detected; test asserts that no second ERP external transaction ID exists. |
+| TC-18 | Attempt to export an expense after it has been rejected | P0 | State Machine / API / ERP | No ERP call occurs; expense remains rejected; audit log records the blocked export attempt. |
+| TC-19 | Attempt to export an expense before all required approvals exist | P0 | State Machine / API / ERP | No ERP call occurs; expense remains in pending approval state; audit log records missing approval. |
+| TC-20 | Expense amount is exactly $5,000 | P0 | Functional / API | Boundary rule is enforced: if only amounts above $5,000 require two-level approval, exactly $5,000 follows the single-approval path; export occurs only after required approval. |
+| TC-21 | Expense amount is above $5,000 and only one approval exists | P0 | Functional / API | Expense is not exported until the second required approval exists; status remains approved-pending or equivalent. |
+| TC-22 | Expense above $5,000 receives second approval from an unauthorized manager | P0 | Security / API | Second approval is denied; no export occurs; audit log records the unauthorized approval attempt. |
+| TC-23 | Employee attempts to approve their own expense | P0 | Security / UI / API | Action is denied; expense does not become approved; audit log records the self-approval attempt. |
+| TC-24 | Two managers approve the same expense simultaneously | P0 | DB / API / Concurrency | Exactly one approval transition succeeds; the other attempt is rejected or audited as denied; no state corruption occurs. |
+| TC-25 | One manager approves while another rejects the same expense simultaneously | P0 | DB / API / Concurrency | Final authoritative state is either approved or rejected, never both; audit log records the conflict. |
+| TC-26 | Export consumer reads stale `APPROVED` state while a rejection commits concurrently | P0 | DB / ERP / Race Condition | Consumer re-checks DB state immediately before calling ERP; no export occurs after rejection. |
+| TC-27 | Two employees submit the same receipt simultaneously | P0 | DB / API / Duplicate Detection | Second submission is blocked or flagged as duplicate; no duplicate export occurs. |
+| TC-28 | Same receipt file is uploaded twice with the same content hash | P0 | DB / Duplicate Detection | Duplicate receipt hash is detected; second expense is blocked or linked as a duplicate. |
+| TC-29 | Similar vendor, date, and amount but distinct valid receipts | P1 | Duplicate Detection | Valid expenses are not falsely blocked; each distinct receipt can proceed through approval and export. |
+| TC-30 | Same logical receipt is submitted under different file names or encodings | P1 | Duplicate Detection | Detection based on content hash, vendor, date, and amount flags the duplicate; no second export occurs. |
+| TC-31 | OCR extracts amount with low confidence | P1 | OCR / Validation | Expense is routed to manual review; no automatic export uses the unvalidated amount. |
+| TC-32 | OCR extracts vendor, date, or tax with low confidence | P1 | OCR / Validation | Expense requires manual review before export; low-confidence fields are not sent to ERP. |
+| TC-33 | OCR service times out or returns an invalid result | P1 | OCR / Resilience | Expense remains pending or manual review; no automatic export or inconsistent state occurs. |
+| TC-34 | OCR correction arrives after export processing has started | P1 | OCR / Concurrency | Export uses a locked approved snapshot; late OCR changes require revalidation or a new version, not a partial/corrupt export. |
+| TC-35 | Expense uses exchange rate applicable to transaction date | P0 | Data / API | Amount and tax are computed using the rate applicable to the transaction date, not the current date. |
+| TC-36 | Transaction date crosses time-zone or date boundary | P1 | Data / API | Correct date bucket is used for rate lookup; boundary cases produce the expected converted amount and tax. |
+| TC-37 | Exchange rate source is unavailable | P1 | Data / Resilience | No export occurs with an unverified rate; expense remains pending or uses an approved fallback policy. |
+| TC-38 | Unauthorized role attempts to export an expense | P0 | Security / API | Request is denied; no ERP call occurs; audit log records the unauthorized export attempt. |
+| TC-39 | User A attempts to approve expense B by changing the expense ID in the URL | P0 | Security / API / IDOR | Authorization check rejects the action; expense B remains unchanged; attempt is logged. |
+| TC-40 | User A attempts to export expense B without ownership or role permission | P0 | Security / API / IDOR | Export is denied; no ERP call occurs; attempt is logged. |
+| TC-41 | Expired, forged, or invalid JWT is used for approval or export | P0 | Security / API | Request is rejected; no state change or ERP export occurs. |
+| TC-42 | Anonymous GET request accesses a receipt object in S3 | P0 | S3 / Security | Anonymous access returns 403; receipt file is not publicly accessible. |
+| TC-43 | Presigned receipt URL is accessed after expiry | P0 | S3 / Security | Expired presigned URL returns 403; financial document is not accessible. |
+| TC-44 | Presigned receipt URL is accessed by an unauthorized role | P0 | S3 / Security | Unauthorized role receives 403; allowed role can access the file and download is audit-logged. |
+| TC-45 | Invalid, corrupted, or unsupported receipt file upload | P1 | S3 / Functional | File is rejected or marked invalid; expense cannot be submitted or exported; no public file leak occurs. |
+| TC-46 | Expense is created without a receipt attachment | P1 | Functional | Expense cannot be submitted or exported until a receipt is attached and validated. |
+| TC-47 | Every state transition is recorded in audit log | P0 | Audit / DB | Every transition includes expense ID, actor, timestamp, event ID, prior status, new status, approval level, and ERP request/external ID where applicable. |
+| TC-48 | Audit log detects duplicate ERP external transaction IDs for the same expense | P0 | Audit / Reconciliation | If two ERP external IDs exist for one expense, the system flags an alert; release test expects zero duplicates. |
+| TC-49 | Application status and ERP external transaction ID reconcile | P0 | Audit / Integration | DB status `EXPORTED` matches the stored ERP external ID; exactly one `EXPORTED` transition exists per expense. |
+| TC-50 | 10,000 concurrent users submit, approve, and export expenses | P1 | Performance / Load | API p95 remains under 30 seconds; no deadlocks occur; Kafka lag stays within SLO; export queue remains bounded. |
