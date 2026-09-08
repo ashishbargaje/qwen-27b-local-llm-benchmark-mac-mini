@@ -1,0 +1,138 @@
+You are acting as a Senior QA Architect.
+
+Below is a fictional product requirement, architecture description, and engineering constraints. Analyze everything carefully and produce a QA strategy.
+
+PRODUCT:
+An enterprise Expense Management platform allows employees to submit expenses through Web UI or mobile app. Managers approve/reject expenses. Finance users can export approved expenses to an ERP.
+
+ARCHITECTURE:
+- Web UI: React
+- Backend: Java Spring Boot REST APIs
+- Database: PostgreSQL
+- Async processing: Kafka
+- Authentication: OAuth2 + JWT
+- File storage: S3-compatible object storage
+- Notifications: Email + Microsoft Teams
+- ERP integration: REST API
+- Search: Elasticsearch
+- Cache: Redis
+
+WORKFLOW:
+1. Employee creates an expense.
+2. Receipt image/PDF is uploaded.
+3. OCR extracts amount, date, vendor and tax.
+4. Expense is submitted.
+5. Backend publishes ExpenseSubmitted event to Kafka.
+6. Manager receives notification.
+7. Manager approves or rejects.
+8. Approved expense is published to Kafka.
+9. Finance service exports it to ERP.
+10. ERP returns an external transaction ID.
+11. Expense status becomes EXPORTED.
+
+BUSINESS RULES:
+- Expenses above $5,000 require two-level approval.
+- Duplicate expenses must be detected.
+- An expense cannot be approved after it has been rejected.
+- An employee cannot approve their own expense.
+- ERP export must be idempotent.
+- Every state transition must be auditable.
+- Receipt files must never be publicly accessible.
+- Expenses must use the exchange rate applicable on the transaction date.
+
+ENGINEERING CONSTRAINTS:
+- 10,000 concurrent users.
+- Kafka can deliver duplicate messages.
+- Kafka messages can arrive out of order.
+- ERP may be unavailable for several hours.
+- OCR accuracy is approximately 95%.
+- Database transactions cannot span Kafka and ERP.
+- API timeout = 30 seconds.
+- Deployment is zero-downtime.
+- Product team has only 3 QA engineers.
+- Release cycle is 2 weeks.
+
+RECENT DEFECT:
+A customer reported that an expense was exported twice to the ERP even though the application showed only one EXPORTED record.
+
+YOUR TASK:
+
+1. Identify the 10 highest-risk areas in this system and explain why each is risky.
+
+2. Design an end-to-end QA strategy covering:
+   - Functional testing
+   - API testing
+   - UI testing
+   - Integration testing
+   - Event-driven/Kafka testing
+   - Database testing
+   - Security testing
+   - Performance testing
+   - Resilience/recovery testing
+   - Auditability
+
+3. Investigate the duplicate ERP export defect.
+   Provide at least 5 technically plausible root causes.
+   For each root cause, explain:
+   - How it could happen
+   - How you would reproduce it
+   - What logs/metrics/traces you would inspect
+   - What test would prevent regression
+
+4. Design test scenarios specifically for Kafka:
+   - Duplicate delivery
+   - Out-of-order events
+   - Consumer retry
+   - Consumer crash
+   - Poison message
+   - Partition failure
+   - Replay
+
+5. Design test scenarios specifically for ERP integration:
+   - Timeout
+   - 500 response
+   - 429 response
+   - Network failure after ERP accepted the request
+   - Duplicate request
+   - Partial response
+   - ERP outage for 6 hours
+   - Retry storm
+
+6. Explain how you would test idempotency of ERP export.
+   Provide a concrete test design including:
+   - Idempotency key
+   - Request generation
+   - Retry behavior
+   - Database state
+   - Expected ERP behavior
+   - Assertions
+
+7. Identify race conditions that could occur in the approval/export workflow.
+   Give at least 5 examples.
+
+8. Design a risk-based regression strategy for a 2-week release with only 3 QA engineers.
+   Clearly prioritize:
+   P0 / P1 / P2 / P3.
+
+9. Propose quality gates for CI/CD.
+   Define which tests should run:
+   - On every pull request
+   - On merge
+   - Nightly
+   - Before production deployment
+
+10. Provide 15 high-value test cases in a table with:
+   ID | Scenario | Priority | Test Type | Expected Result
+
+11. Write pseudocode or Java/TypeScript-style automation for one test that detects duplicate ERP export.
+
+12. Finally, challenge your own QA strategy:
+   Identify 5 assumptions you made and explain what could go wrong if each assumption is false.
+
+IMPORTANT:
+- Do not make up external facts.
+- Clearly distinguish requirements from assumptions.
+- Prefer failure-mode analysis over happy-path testing.
+- Think like a QA Architect, not a manual tester.
+- Be technically precise.
+- Where multiple solutions exist, compare them and recommend one.
