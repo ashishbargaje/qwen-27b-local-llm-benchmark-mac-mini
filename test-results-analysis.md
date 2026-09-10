@@ -6,7 +6,7 @@ This experiment evaluated a **27B parameter LLM on a Mac mini M4 with 24GB unifi
 
 ```text
 Model quantization : IQ2_XS (2-bit)
-Context            : 65K
+Context            : 64K
 Primary KV cache   : Q8_0
 Latest KV cache    : Q4_0
 Runtime             : Ollama
@@ -135,7 +135,7 @@ The next optimization step evaluated whether the KV cache could be reduced furth
 
 | Metric | Q8_0 KV | Q4_0 KV |
 |---|---:|---:|
-| Context | 65K | 65K |
+| Context | 64K | 64K |
 | Loaded runtime size | ~11 GB | **~10 GB** |
 | Generated tokens | 28,250 | 24,948 |
 | Evaluation time | 4,238.26 s | 3,797.16 s |
@@ -192,7 +192,7 @@ The useful signals are:
 - the model remained operational for a very long generation
 - thousands of output tokens were produced
 - generation speed stayed around the measured range above
-- the 65K context configuration remained in use
+- the 64K context configuration remained in use
 - the system remained in the observed no-swap states
 
 For QA architecture experiments, this is more representative of sustained reasoning workloads than a short 100-token benchmark.
@@ -295,7 +295,7 @@ This supports the conclusion that the large memory footprint was tied to the act
 
 The 27B model needs aggressive model quantization to make a 24GB machine practical.
 
-### 65K context
+### 64K context
 
 The experiment intentionally retained a large context window because long-context behaviour was part of the objective.
 
@@ -416,7 +416,7 @@ Unified Memory     : 24 GB
 Model              : Qwen3.8-27B
 Model Quantization : IQ2_XS (2-bit)
 
-Context            : 65K
+Context            : 64K
 KV Cache           : Q4_0
 
 Runtime            : Ollama
@@ -463,7 +463,7 @@ The progression was:
 ```text
 27B IQ2_XS
      ↓
-65K context
+64K context
      ↓
 Q8_0 KV baseline
      ↓

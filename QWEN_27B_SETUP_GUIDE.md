@@ -1,4 +1,4 @@
-# Qwen3.8-27B — 2-bit Model + Q4/Q8 KV Cache + 65K Context
+# Qwen3.8-27B — 2-bit Model + Q4/Q8 KV Cache + 64K Context
 
 ## What we are configuring
 
@@ -6,7 +6,7 @@
 - **Model quantization:** `IQ2_XS` (2-bit model quantization)
 - **KV cache:** `q8_0` or `q4_0`
 - **Flash Attention:** enabled
-- **Context:** `65536` (65K)
+- **Context:** `65536` (64K)
 
 > **Important:** `IQ2_XS` is the 2-bit model quantization. `q8_0` / `q4_0` is a separate KV-cache setting.
 
@@ -56,7 +56,7 @@ launchctl setenv OLLAMA_FLASH_ATTENTION 1
 
 ---
 
-### 4. Set 65K context
+### 4. Set 64K context
 
 ```bash
 launchctl setenv OLLAMA_CONTEXT_LENGTH 65536
@@ -199,7 +199,7 @@ Qwen3.8-27B IQ2_XS GGUF
 
         +
 
-       65K context
+       64K context
         ↓
       65536 tokens
 ```

@@ -55,7 +55,7 @@ Runtime            : Ollama
 ```text
 Model              : Qwen3.8-27B
 Model Quantization : IQ2_XS (2-bit)
-Context            : 65K
+Context            : 64K
 ```
 
 ### Configuration Evolution
@@ -67,7 +67,7 @@ The experiment was evaluated in stages.
 ```text
 27B
 IQ2_XS model quantization
-65K context
+64K context
 Q8_0 KV cache
 ```
 
@@ -85,7 +85,7 @@ The KV-cache precision was then changed from Q8_0 to Q4_0.
 ```text
 27B
 IQ2_XS model quantization
-65K context
+64K context
 Q4_0 KV cache
 ```
 
@@ -207,7 +207,7 @@ The next optimization step was to evaluate whether the KV cache could be reduced
 | Metric | Q8_0 KV | Q4_0 KV |
 |---|---:|---:|
 | Model | Qwen3.8-27B IQ2_XS | Qwen3.8-27B IQ2_XS |
-| Context | 65K | 65K |
+| Context | 64K | 64K |
 | Loaded Runtime Size | ~11 GB | **~10 GB** |
 | Generation Speed | **6.67 tok/s** | 6.57 tok/s |
 | Memory | Higher | **~1 GB lower** |
@@ -246,7 +246,7 @@ The experiment was specifically interested in long-context workloads.
 The configuration therefore retained:
 
 ```text
-Context = 65K
+Context = 64K
 ```
 
 The objective was to reduce memory usage through runtime optimization rather than simply reducing the context window.
@@ -442,7 +442,7 @@ Unified Memory     : 24 GB
 Model              : Qwen3.8-27B
 Model Quantization : IQ2_XS (2-bit)
 
-Context            : 65K
+Context            : 64K
 KV Cache           : Q4_0
 
 Runtime            : Ollama
@@ -451,7 +451,7 @@ Runtime            : Ollama
 The practical rationale is:
 
 - **IQ2_XS** makes the 27B model viable within the hardware constraint.
-- **65K context** preserves the long-context capability being evaluated.
+- **64K context** preserves the long-context capability being evaluated.
 - **Q4_0 KV cache** provides additional memory headroom.
 - The measured throughput remained around **6.6 tok/s** in the long QA experiments.
 - QA output quality remained very close to Q8_0 in the tested scenarios.
@@ -544,7 +544,7 @@ The reported numbers are observations from this specific environment:
 - 24GB unified memory
 - Qwen3.8-27B
 - IQ2_XS model quantization
-- 65K context
+- 64K context
 - Ollama runtime
 - tested KV-cache configurations
 - specific QA and vision workloads
@@ -572,7 +572,7 @@ The progression was:
 ```text
 27B IQ2_XS
      ↓
-65K context
+64K context
      ↓
 Q8_0 KV baseline
      ↓

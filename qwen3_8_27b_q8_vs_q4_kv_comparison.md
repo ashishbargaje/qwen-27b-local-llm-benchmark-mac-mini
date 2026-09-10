@@ -3,7 +3,7 @@
 ## Test setup
 
 - Model: Qwen3.8-27B `IQ2_XS`
-- Context: 65K
+- Context: 64K
 - GPU: 100%
 - Workload: Same QA scenario, but token counts were not identical between runs
 
