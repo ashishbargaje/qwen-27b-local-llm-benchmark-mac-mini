@@ -1,167 +1,1805 @@
-Below is an exact, item‑by‑item account of everything visible in each of the ten chart images, followed by the composite image that contains all ten.
+## Scope note
+
+I am treating the textual product requirement, architecture, workflow, business rules, engineering constraints, and recent defect as the normative inputs. The attached charts are not used in the QA strategy because they do not define the expense-management platform requirements.
+
+I will clearly distinguish:
+
+- **Requirements**: explicitly stated in the prompt.
+- **Assumptions**: things I assume for test design but are not explicitly guaranteed.
 
 ---
 
-### Image 1 — “1. Clean Chart”
-- **Header band (light blue):** “1. Clean Chart”
-- **Chart title:** “Quarterly Revenue (USD)”
-- **Chart type:** vertical bar chart
-- **Y‑axis label:** “Revenue (USD)”; tick marks: 0, 10,000, 20,000, 30,000, 40,000, 50,000
-- **X‑axis label:** “Quarter”; categories: Q1, Q2, Q3, Q4
-- **Bars (left→right) with value labels above each bar:**
-  - Q1: blue bar, label **23,500**
-  - Q2: orange bar, label **31,200**
-  - Q3: green bar, label **28,900**
-  - Q4: red bar, label **41,300**
-- **Legend (bottom, two rows):**
-  - Row 1: blue dot “Q1: 23,500”, orange dot “Q2: 31,200”
-  - Row 2: green dot “Q3: 28,900”, red dot “Q4: 41,300”
+# 1. Ten highest-risk areas
+
+| # | Risk area | Why it is risky | QA focus |
+|---|---|---|---|
+| 1 | **Kafka duplicate delivery and out-of-order events** | Kafka can deliver the same event multiple times and events can arrive out of order. If consumers are not idempotent, side effects such as ERP export can happen twice. | Event idempotency, consumer retry, replay, partition failure, out-of-order handling. |
+| 2 | **ERP export idempotency and partial success** | The ERP is an external system. A request may be accepted but the response may be lost. Retries can create duplicate ERP transactions if the idempotency key is unstable or missing. | Stable idempotency key, retry behavior, reconciliation, ERP mock testing. |
+| 3 | **Expense state machine consistency and auditability** | Expenses move through states such as SUBMITTED, APPROVED, REJECTED, EXPORTED. Concurrent updates can corrupt state. Every transition must be auditable. | State transition tests, optimistic locking, audit logs, trace IDs. |
+| 4 | **Approval authorization and two-level approval** | Expenses above $5,000 require two-level approval. Employees cannot approve their own expenses. Rejected expenses cannot be approved. Violations create financial and compliance risk. | Role-based authorization, approval workflow, API and UI enforcement. |
+| 5 | **Duplicate expense detection** | Duplicate expenses must be detected. OCR errors, repeated uploads, or race conditions can allow duplicates to pass validation. | Duplicate detection rules, normalized matching, concurrency tests. |
+| 6 | **OCR accuracy and exchange-rate correctness** | OCR is approximately 95% accurate. Amount, date, vendor, and tax extraction errors can cause incorrect financial records. Exchange rate must be applied by transaction date. | OCR golden-file tests, manual correction workflow, exchange-rate tests. |
+| 7 | **Receipt file security** | Receipt files must never be publicly accessible. Misconfigured S3-compatible storage, public URLs, or weak access control can expose sensitive documents. | File upload validation, object storage access control, signed URL tests, authorization tests. |
+| 8 | **Authentication and authorization** | OAuth2 + JWT protects API access. Token expiry, role escalation, or missing authorization checks can allow unauthorized approvals or exports. | AuthN tests, JWT lifecycle, role-based access, API authorization. |
+| 9 | **Performance under 10,000 concurrent users** | The system must handle high concurrency with a 30-second API timeout. Kafka, database, ERP, and search/cache components can become bottlenecks. | Load testing, latency percentiles, throughput, timeout behavior. |
+| 10 | **Resilience/recovery and cross-system consistency** | ERP may be unavailable for hours, Kafka partitions can fail, consumers can crash, and retries can storm. Because database transactions cannot span Kafka and ERP, consistency must be achieved through idempotency, outbox patterns, and reconciliation. | Chaos testing, outage simulation, consumer crash, retry storm, recovery validation. |
 
 ---
 
-### Image 2 — “2. Smaller Fonts”
-- **Header band:** “2. Smaller Fonts”
-- **Chart title:** “Daily Active Users (Last 14 Days)”
-- **Chart type:** line chart with circular point markers (no per‑point numeric labels)
-- **Y‑axis label:** “Users”; tick marks: 0, 200, 400, 600, 800, 1,000, 1,200
-- **X‑axis label:** “Date”; categories: Jun 1, Jun 2, Jun 3, Jun 4, Jun 5, Jun 6, Jun 7, Jun 8, Jun 9, Jun 10, Jun 11, Jun 12, Jun 13, Jun 14
-- **Three lines:**
-  - Blue line (lowest, roughly 200–400 range)
-  - Green line (middle, roughly 400–700 range)
-  - Orange line (highest, roughly 750–1,100 range)
-- **Legend (bottom):** blue dot “New Users”, green dot “Returning Users”, orange dot “Total Users”
+# 2. End-to-end QA strategy
+
+## 2.1 Overall approach
+
+The QA strategy should be failure-mode driven, not happy-path driven. The highest-value tests should focus on:
+
+- Duplicate side effects
+- Out-of-order events
+- Partial success
+- Race conditions
+- Recovery after failure
+- Auditability
+- Security
+- Performance under load
+
+Recommended test environment:
+
+- Staging environment with real or mock services:
+  - Spring Boot APIs
+  - PostgreSQL
+  - Kafka
+  - Redis
+  - Elasticsearch
+  - S3-compatible object storage
+  - Mock ERP
+  - Email/Teams notification mocks
+- Synthetic receipt files for OCR testing.
+- Trace IDs for every request, event, and state transition.
+- A chaos harness for Kafka, ERP, database, and consumer failures.
+- An ERP mock that can simulate:
+  - Accepted request with lost response
+  - Timeout
+  - 500
+  - 429
+  - Partial response
+  - Outage
+  - Duplicate idempotency behavior
 
 ---
 
-### Image 3 — “3. Overlapping Legend”
-- **Header band:** “3. Overlapping Legend”
-- **Chart title:** “Market Share by Product”
-- **Chart type:** pie chart
-- **Slice labels (on the pie, clockwise from top‑right):** 40% (blue), 25% (orange), 15% (green), 10% (red), 7% (purple), 3% (brown)
-- **Legend box:** positioned over the lower‑right portion of the pie (overlapping the chart area), with white background and a border; entries:
-  - blue dot “Product A (40%)”
-  - orange dot “Product B (25%)”
-  - green dot “Product C (15%)”
-  - red dot “Product D (10%)”
-  - purple dot “Product E (7%)”
-  - brown dot “Product F (3%)”
+## 2.2 Functional testing
+
+Functional tests should cover the full business workflow and failure modes.
+
+Key functional areas:
+
+1. Expense creation
+   - Valid expense creation
+   - Invalid amount, date, vendor, currency
+   - Missing required fields
+   - Exchange-rate application
+
+2. Receipt upload
+   - Image/PDF upload
+   - File type validation
+   - File size limits
+   - Malformed file handling
+   - OCR extraction
+   - Manual correction after OCR
+
+3. Expense submission
+   - Submission event publication
+   - Duplicate detection
+   - State transition to SUBMITTED
+   - Audit log
+
+4. Approval workflow
+   - Single approval for expenses below $5,000
+   - Two-level approval for expenses above $5,000
+   - Employee cannot approve own expense
+   - Rejected expense cannot be approved
+   - Concurrent approval attempts
+   - Approval after rejection attempt
+
+5. Rejection workflow
+   - Rejection state transition
+   - No export after rejection
+   - Audit log
+   - UI reflects rejection
+
+6. Export workflow
+   - Approved expense published to Kafka
+   - Finance service exports to ERP
+   - ERP returns external transaction ID
+   - Expense status becomes EXPORTED
+   - Duplicate export prevention
+   - Partial ERP response handling
+
+7. Search and reporting
+   - Elasticsearch search correctness
+   - Stale search results
+   - Cache invalidation
+   - Role-based visibility
 
 ---
 
-### Image 4 — “4. Dense Numerical Values”
-- **Header band:** “4. Dense Numerical Values”
-- **Chart title:** “Monthly Sales by Region (USD)”
-- **Chart type:** grouped bar chart (4 bars per month)
-- **Y‑axis:** tick marks 0, 2,000, 4,000, 6,000, 8,000, 10,000, 12,000
-- **X‑axis:** Jan, Feb, Mar, Apr, May, Jun
-- **Per‑month values (blue, orange, green, brown):**
-  - Jan: 5,200 / 3,800 / 2,100 / 1,900
-  - Feb: 6,100 / 5,300 / 4,200 / 2,700
-  - Mar: 7,400 / 5,800 / 3,100 / 3,900
-  - Apr: 8,100 / 6,700 / 5,400 / 3,900
-  - May: 9,500 / 7,200 / 6,100 / 4,300
-  - Jun: 10,800 / 8,400 / 6,900 / 5,200
-- **Legend (bottom, two rows):**
-  - Row 1: blue “North America”, orange “Europe”
-  - Row 2: green “Asia”, brown “Rest of World”
+## 2.3 API testing
+
+API tests should cover REST endpoints, authentication, authorization, validation, idempotency, and error handling.
+
+Key API test areas:
+
+1. Authentication
+   - Valid JWT
+   - Expired JWT
+   - Invalid JWT
+   - Token refresh behavior
+   - Role-based access
+
+2. Authorization
+   - Employee can create expense
+   - Employee cannot approve own expense
+   - Manager can approve
+   - Finance user can export
+   - Unauthorized user cannot approve/export
+
+3. Expense creation API
+   - Valid payload
+   - Invalid payload
+   - Duplicate expense detection
+   - Exchange-rate validation
+   - Idempotent creation if supported
+
+4. Approval API
+   - Valid approval
+   - Invalid approval
+   - Rejected expense approval attempt
+   - Two-level approval enforcement
+   - Concurrent approval attempts
+   - Idempotent approval behavior
+
+5. Rejection API
+   - Valid rejection
+   - Rejection of already rejected expense
+   - Rejection after approval attempt
+   - Audit log
+
+6. Export API / consumer behavior
+   - Export request generation
+   - Idempotency key
+   - Retry behavior
+   - Timeout handling
+   - Partial response handling
+   - ERP outage handling
+
+7. Search API
+   - Search by vendor, date, amount, status
+   - Stale index behavior
+   - Pagination
+   - Authorization
+
+8. File upload API
+   - Valid file upload
+   - Invalid file type
+   - Oversized file
+   - Malicious file handling
+   - Access control
 
 ---
 
-### Image 5 — “5. Decimals in Values”
-- **Header band:** “5. Decimals in Values”
-- **Chart title:** “Stock Prices (USD)”
-- **Chart type:** line chart with circular point markers and per‑point numeric labels
-- **Y‑axis label:** “Price (USD)”; tick marks: 50, 75, 100, 125, 150, 175, 200
-- **X‑axis label:** “Date”; categories: Apr 1, Apr 2, Apr 3, Apr 4, Apr 5, Apr 6, Apr 7
-- **Three lines with labels (left→right):**
-  - Blue (AAPL): 123.45, 125.30, 127.80, 130.25, 128.60, 131.40, 133.75
-  - Orange (GOOG): 152.30, 155.20, 153.75, 158.90, 162.10, 160.45, 165.60
-  - Green (MSFT): 98.20, 99.10, 101.35, 102.60, 100.90, 103.15, 104.80
-- **Legend (bottom):** blue “AAPL”, orange “GOOG”, green “MSFT”
+## 2.4 UI testing
+
+UI tests should cover Web UI and mobile app flows.
+
+Key UI test areas:
+
+1. Expense creation
+   - Form validation
+   - File upload
+   - OCR result display
+   - Manual correction
+   - Submission confirmation
+
+2. Approval UI
+   - Manager view
+   - Two-level approval UI
+   - Rejection UI
+   - Status display
+   - Audit trail visibility
+
+3. Export UI
+   - Finance view
+   - EXPORTED status
+   - External transaction ID display
+   - Pending export state
+   - Error state after ERP failure
+
+4. Security UI
+   - Role-based visibility
+   - No public receipt links
+   - No unauthorized approval buttons
+   - Session expiry behavior
+
+5. Mobile app
+   - Same business rules as Web UI
+   - Offline/online behavior if applicable
+   - Notification handling
+   - File upload behavior
 
 ---
 
-### Image 6 — “6. Negative Values”
-- **Header band:** “6. Negative Values”
-- **Chart title:** “Profit / Loss by Quarter (USD)”
-- **Chart type:** bar chart including bars extending below the zero line
-- **Y‑axis label:** “Amount (USD)”; tick marks: −30,000, −20,000, −10,000, 0, 10,000, 20,000, 30,000
-- **X‑axis label:** “Quarter”; categories: Q1, Q2, Q3, Q4
-- **Bars with value labels:**
-  - Q1: red bar below zero, label **−12,500**
-  - Q2: green bar above zero, label **18,200**
-  - Q3: red bar below zero, label **−8,300**
-  - Q4: green bar above zero, label **26,700**
-- **Legend (bottom):** green dot “Profit”, red dot “Loss”
+## 2.5 Integration testing
+
+Integration tests should verify interactions between services.
+
+Key integration areas:
+
+1. Backend to Kafka
+   - ExpenseSubmitted event
+   - ExpenseApproved event
+   - Event schema validation
+   - Duplicate event handling
+   - Out-of-order event handling
+
+2. Kafka to consumer
+   - Consumer group behavior
+   - Retry behavior
+   - Crash recovery
+   - Poison message handling
+   - Partition failure recovery
+
+3. Consumer to ERP
+   - Export request
+   - Idempotency key
+   - Retry behavior
+   - Timeout handling
+   - Partial response handling
+   - ERP outage handling
+
+4. ERP to backend
+   - External transaction ID
+   - Status update
+   - Audit log
+   - Reconciliation
+
+5. S3-compatible object storage
+   - File upload
+   - Private access
+   - Signed URL access
+   - File retrieval by authorized users
+
+6. Elasticsearch
+   - Indexing approved expenses
+   - Search correctness
+   - Stale data handling
+
+7. Redis cache
+   - Cache consistency
+   - Cache invalidation
+   - Stale status prevention
+
+8. Notifications
+   - Email notification
+   - Microsoft Teams notification
+   - Notification failure handling
+   - Notification auditability
 
 ---
 
-### Image 7 — “7. Similar Colors”
-- **Header band:** “7. Similar Colors”
-- **Chart title:** “Expenses by Category (USD)”
-- **Chart type:** vertical bar chart
-- **Y‑axis:** tick marks 0, 1,000, 2,000, 3,000, 4,000, 5,000
-- **X‑axis categories (slightly rotated labels):** Travel, Meals, Software, Marketing, Office, Other
-- **Bars with value labels above each bar:**
-  - Travel: 4,200 (teal/cyan)
-  - Meals: 3,800 (cyan)
-  - Software: 3,600 (light blue)
-  - Marketing: 3,400 (blue‑purple)
-  - Office: 3,200 (purple)
-  - Other: 3,000 (purple)
-- **Legend (bottom, two rows):**
-  - Row 1: blue “Travel”, cyan “Meals”, light‑blue “Marketing”
-  - Row 2: purple “Marketing”, purple “Office”, purple “Other”
-  - (Note: the label “Marketing” appears twice in the legend as printed.)
+## 2.6 Event-driven / Kafka testing
+
+Kafka testing should focus on at-least-once delivery, duplicate events, out-of-order events, consumer failures, and replay.
+
+Key Kafka test areas:
+
+1. Duplicate delivery
+   - Same event delivered twice
+   - Consumer must process side effect once
+   - ERP export must happen once
+
+2. Out-of-order events
+   - ExpenseApproved before ExpenseSubmitted
+   - Older event version after newer version
+   - Consumer must not corrupt state
+
+3. Consumer retry
+   - Transient failure before side effect
+   - Retry with backoff
+   - No duplicate side effect
+
+4. Consumer crash
+   - Consumer crashes after processing
+   - Offset not committed
+   - Replay must not duplicate ERP export
+
+5. Poison message
+   - Malformed event
+   - Invalid JSON
+   - Missing required fields
+   - Consumer should not crash entire group
+   - Event should go to dead-letter queue
+
+6. Partition failure
+   - One Kafka partition unavailable
+   - Consumer rebalance
+   - No data loss
+   - No duplicate processing
+   - Recovery validation
+
+7. Replay
+   - Replay topic from offset
+   - Consumer must be idempotent
+   - No duplicate ERP export
+   - Audit trail remains consistent
 
 ---
 
-### Image 8 — “8. Rotated Labels”
-- **Header band:** “8. Rotated Labels”
-- **Chart title:** “Product Sales by Month (USD)”
-- **Chart type:** vertical bar chart
-- **Y‑axis:** tick marks 0, 5,000, 10,000, 15,000
-- **X‑axis label:** “Month”; rotated category labels: January, February, March, April, May, June, July, August, September, October, November, December
-- **Single series (blue) with value labels above each bar:**
-  - January 2,300; February 3,400; March 5,600; April 7,800; May 6,900; June 8,200; July 9,100; August 11,400; September 10,200; October 9,800; November 8,400; December 7,200
-- **Legend (bottom):** blue dot “Sales”
+## 2.7 Database testing
+
+Database tests should verify state integrity, concurrency, auditability, and data consistency.
+
+Key database test areas:
+
+1. Expense state transitions
+   - SUBMITTED
+   - APPROVED
+   - REJECTED
+   - EXPORTED
+   - Invalid transitions blocked
+
+2. Concurrency
+   - Two managers approve same expense
+   - Approval and rejection race
+   - Export consumer and ERP reconciliation race
+   - Duplicate expense submission race
+
+3. Auditability
+   - Every state transition logged
+   - Actor recorded
+   - Timestamp recorded
+   - Event ID recorded
+   - Trace ID recorded
+
+4. Idempotency
+   - Unique constraint on export idempotency key
+   - Duplicate export records prevented
+   - External transaction ID stored correctly
+
+5. Data integrity
+   - Amount, currency, tax, date consistency
+   - Exchange-rate correctness
+   - OCR correction persistence
+   - Duplicate detection constraints
+
+6. Migrations
+   - Zero-downtime migration
+   - Rollback safety
+   - Data validation after migration
 
 ---
 
-### Image 9 — “9. Multiple Series Crossing”
-- **Header band:** “9. Multiple Series Crossing”
-- **Chart title:** “Product Performance Index”
-- **Chart type:** line chart with circular point markers and per‑point numeric labels
-- **Y‑axis label:** “Index Value”; tick marks: 0, 25, 50, 75, 100, 125
-- **X‑axis:** Jan, Feb, Mar, Apr, May, Jun
-- **Three lines with labels (left→right):**
-  - Blue (Product A): 50, 70, 60, 80, 90, 85
-  - Orange (Product B): 80, 60, 75, 60, 60, 55
-  - Green (Product C): 30, 45, 55, 60, 75, 95
-- **Legend (bottom):** blue “Product A”, orange “Product B”, green “Product C”
+## 2.8 Security testing
+
+Security tests should cover authentication, authorization, file access, secrets, and injection risks.
+
+Key security test areas:
+
+1. Authentication
+   - OAuth2 flow
+   - JWT validation
+   - Token expiry
+   - Token refresh
+   - Invalid token handling
+
+2. Authorization
+   - Employee cannot approve own expense
+   - Manager cannot export if not authorized
+   - Finance user cannot approve if not authorized
+   - Role escalation prevention
+
+3. File security
+   - Receipt files not publicly accessible
+   - S3 bucket policy
+   - Signed URL expiry
+   - Unauthorized download prevention
+   - Upload validation
+
+4. API security
+   - Injection testing
+   - Broken authentication
+   - Broken access control
+   - Sensitive data exposure
+   - Rate limiting
+
+5. Secrets and configuration
+   - ERP credentials
+   - Kafka credentials
+   - Database credentials
+   - Object storage credentials
+   - No secrets in logs or UI
+
+6. Audit and logging security
+   - Logs do not expose sensitive receipt content unnecessarily
+   - Audit trail integrity
+   - Trace ID correlation
 
 ---
 
-### Image 10 — “10. Low Resolution / Noisy”
-- **Header band:** “10. Low Resolution / Noisy”
-- **Chart title:** “Website Traffic (Last 7 Days)”
-- **Chart type:** grouped bar chart (2 bars per day); the entire image has a grainy/noisy texture
-- **Y‑axis:** tick marks 0, 500, 1,000, 1,500, 2,000, 2,500
-- **X‑axis label:** “Day”; categories: Mon, Tue, Wed, Thu, Fri, Sat, Sun
-- **Per‑day values (blue, orange):**
-  - Mon: 1,200 / 800
-  - Tue: 1,450 / 950
-  - Wed: 1,350 / 900
-  - Thu: 1,800 / 1,200
-  - Fri: 2,100 / 1,400
-  - Sat: 1,700 / 1,150
-  - Sun: 1,600 / 1,050
-- **Legend (placed in the upper area of the plot, overlapping the chart):** blue “Page Views”, orange “Users”
+## 2.9 Performance testing
+
+Performance tests should validate the system under 10,000 concurrent users and a 30-second API timeout.
+
+Key performance test areas:
+
+1. API latency
+   - p50, p90, p95, p99
+   - API timeout behavior at 30 seconds
+   - Timeout under load
+
+2. Kafka throughput
+   - Event publish rate
+   - Consumer lag
+   - Duplicate event rate
+   - Partition throughput
+
+3. Database performance
+   - Query latency
+   - Lock contention
+   - Concurrent state updates
+   - Index performance
+
+4. ERP integration performance
+   - Export request latency
+   - Retry behavior
+   - ERP outage impact
+   - Retry storm control
+
+5. Search and cache performance
+   - Elasticsearch query latency
+   - Redis cache hit/miss
+   - Stale data impact
+
+6. UI performance
+   - Page load under load
+   - Mobile app responsiveness
+   - File upload performance
 
 ---
 
-### Final composite image
-- A single image laid out as a **2‑row × 5‑column grid** of the ten panels above.
-- **Top row (left→right):** panels 1, 2, 3, 4, 5.
-- **Bottom row (left→right):** panels 6, 7, 8, 9, 10.
-- Each panel in the grid reproduces exactly the header, title, axes, data values, colors, and legend described for its corresponding numbered image above (including the overlapping legend in panel 3, the rotated x‑axis labels in panel 7 and 8, the negative bars in panel 6, the decimal values in panel 5, and the noisy texture in panel 10).
+## 2.10 Resilience/recovery testing
+
+Resilience tests should simulate failures and verify recovery without duplicate side effects.
+
+Key resilience test areas:
+
+1. ERP outage
+   - ERP unavailable for 6 hours
+   - Export backlog retained
+   - No data loss
+   - Export after recovery
+   - Alerts and reconciliation
+
+2. Kafka partition failure
+   - One partition down
+   - Consumer rebalance
+   - No duplicate processing
+   - Recovery validation
+
+3. Consumer crash
+   - Consumer crashes after ERP call
+   - Offset not committed
+   - Replay without duplicate export
+
+4. Network failure
+   - Request sent to ERP
+   - Response lost
+   - Retry with idempotency key
+   - No duplicate ERP transaction
+
+5. Retry storm
+   - Many retries due to outage
+   - Exponential backoff
+   - Jitter
+   - Circuit breaker
+   - ERP load protection
+
+6. Poison message
+   - Malformed event
+   - Dead-letter queue
+   - No consumer group crash
+   - Alerting
+
+7. Zero-downtime deployment
+   - Deployment without downtime
+   - Rollback safety
+   - Data migration validation
+   - Kafka/ERP consistency after deployment
+
+---
+
+## 2.11 Auditability testing
+
+Auditability is a business rule and a high-risk area.
+
+Key auditability tests:
+
+1. Every state transition is logged
+   - SUBMITTED
+   - APPROVED
+   - REJECTED
+   - EXPORTED
+   - OCR correction
+   - Manual override
+
+2. Audit record includes:
+   - Expense ID
+   - Actor
+   - Role
+   - Timestamp
+   - Event ID
+   - Trace ID
+   - Previous state
+   - New state
+   - Reason or decision
+
+3. Audit trail is queryable
+   - By expense
+   - By user
+   - By time range
+   - By state
+   - By event ID
+
+4. Audit trail is tamper-resistant
+   - Append-only log
+   - Hashing or signed records if required
+   - No silent updates
+
+5. Audit trail supports defect investigation
+   - Duplicate ERP export investigation
+   - Approval race investigation
+   - ERP partial response investigation
+
+---
+
+# 3. Investigation of the duplicate ERP export defect
+
+The reported defect is:
+
+> An expense was exported twice to the ERP even though the application showed only one EXPORTED record.
+
+This strongly suggests a failure in end-to-end idempotency, especially around Kafka delivery, ERP retry, database state updates, or ERP-side deduplication.
+
+Below are six technically plausible root causes.
+
+---
+
+## Root cause 1: Kafka duplicate delivery plus non-idempotent consumer
+
+### How it could happen
+
+The `ExpenseApproved` event is delivered twice to the export consumer. The consumer processes both events and calls the ERP twice. If the consumer does not check an idempotency key or database state before calling the ERP, the ERP receives two exports.
+
+### How to reproduce
+
+1. Create an expense.
+2. Approve it.
+3. Publish the same `ExpenseApproved` event twice with the same event ID and expense ID.
+4. Run the export consumer.
+5. Observe that the ERP mock receives two export requests.
+
+### Logs/metrics/traces to inspect
+
+- Kafka event ID
+- Kafka offset
+- Kafka partition
+- Consumer group
+- Consumer lag
+- ERP request log
+- ERP idempotency key
+- ERP external transaction IDs
+- Database status update log
+- Trace ID
+
+### Regression test
+
+Test that duplicate delivery of the same approved event results in exactly one ERP export and one EXPORTED state transition.
+
+---
+
+## Root cause 2: Export retry after timeout with unstable idempotency key
+
+### How it could happen
+
+The export service calls the ERP. The ERP accepts the request, but the response is lost or times out. The export service retries. If the retry uses a new request UUID or no stable idempotency key, the ERP may treat it as a new transaction and export the expense twice.
+
+### How to reproduce
+
+1. Mock ERP accepts the first request but returns a timeout or no response.
+2. Export service retries with a new or unstable idempotency key.
+3. ERP accepts the second request.
+4. ERP records two external transactions.
+5. Application may show only one EXPORTED record if it stores only the last external ID.
+
+### Logs/metrics/traces to inspect
+
+- HTTP status code
+- Timeout duration
+- Retry count
+- Idempotency key
+- ERP external transaction IDs
+- ERP request timestamps
+- Database status update
+- Trace ID
+
+### Regression test
+
+Test that a retry after timeout uses the same stable idempotency key and the ERP returns the same external transaction ID without creating a second transaction.
+
+---
+
+## Root cause 3: Race condition in database state update
+
+### How it could happen
+
+Two consumer threads or processes read the expense status as not exported. Both call the ERP before either updates the database status to EXPORTED. The database does not use row locking, optimistic concurrency, or a unique export constraint, so both side effects occur.
+
+### How to reproduce
+
+1. Create an approved expense.
+2. Start two export workers processing the same event.
+3. Both read status as not exported.
+4. Both call ERP.
+5. Both update database status.
+6. ERP receives two exports.
+
+### Logs/metrics/traces to inspect
+
+- Database row version
+- Lock wait time
+- Worker/thread ID
+- ERP request log
+- Status update timestamp
+- Trace ID
+- Consumer offset
+
+### Regression test
+
+Test concurrent processing of the same approved event and assert that only one ERP export occurs. Use row locking, optimistic locking, or a unique idempotency constraint.
+
+---
+
+## Root cause 4: Upstream duplicate approval event publication
+
+### How it could happen
+
+The approval API publishes the `ExpenseApproved` event twice. This can happen because:
+
+- A manager clicks approve twice.
+- The API retries after a timeout.
+- The producer sends the event twice due to network retry.
+- The approval endpoint is not idempotent.
+
+The consumer then receives two approved events and exports twice.
+
+### How to reproduce
+
+1. Call the approve endpoint twice for the same expense.
+2. Observe two `ExpenseApproved` events in Kafka.
+3. Run the export consumer.
+4. Observe two ERP exports.
+
+### Logs/metrics/traces to inspect
+
+- API request log
+- Approval endpoint idempotency behavior
+- Kafka event publish count
+- Event ID
+- Kafka offset
+- ERP request log
+
+### Regression test
+
+Test that the approval API is idempotent and that duplicate approval attempts produce only one approved event and one ERP export.
+
+---
+
+## Root cause 5: Consumer crash after ERP call but before database commit
+
+### How it could happen
+
+The consumer calls the ERP and receives an external transaction ID. Before the consumer updates the database status to EXPORTED, it crashes. The Kafka offset is not committed. On restart, the consumer replays the event and calls the ERP again.
+
+### How to reproduce
+
+1. Consumer processes approved event.
+2. ERP call succeeds.
+3. Consumer crashes before database update.
+4. Consumer restarts.
+5. Event is replayed.
+6. ERP receives a second export.
+
+### Logs/metrics/traces to inspect
+
+- Consumer crash log
+- Kafka offset commit status
+- ERP request log
+- Database status update log
+- External transaction IDs
+- Trace ID
+
+### Regression test
+
+Test consumer crash recovery and replay. Assert that replay does not create a second ERP export. Use idempotency key, transactional outbox, or ERP-side deduplication.
+
+---
+
+## Root cause 6: Stale cache or out-of-order status read
+
+### How it could happen
+
+The export consumer reads a stale Redis cache value indicating the expense is not exported. The database may already have been updated, but the cache is not consistent. A duplicate event is processed using the stale cache value, causing a second ERP export.
+
+### How to reproduce
+
+1. Expense status is updated to EXPORTED in database.
+2. Redis cache still says not exported.
+3. Duplicate event is processed.
+4. Consumer uses stale cache.
+5. ERP export happens again.
+
+### Logs/metrics/traces to inspect
+
+- Redis cache read/write log
+- Database status
+- Event order
+- Cache invalidation timestamp
+- ERP request log
+- Trace ID
+
+### Regression test
+
+Test cache consistency and stale reads. Assert that the database is the source of truth and stale cache values do not cause duplicate ERP exports.
+
+---
+
+# 4. Kafka-specific test scenarios
+
+## 4.1 Duplicate delivery
+
+### Setup
+
+- Publish the same `ExpenseApproved` event twice.
+- Use the same event ID and expense ID.
+- Use the same partition key.
+
+### Expected behavior
+
+- Consumer processes the event once.
+- ERP export happens once.
+- Database status becomes EXPORTED once.
+- Audit log records one EXPORTED transition.
+
+### Assertions
+
+- ERP mock call count = 1
+- ERP external transaction ID count = 1
+- Database EXPORTED transition count = 1
+- Audit log count = 1
+
+---
+
+## 4.2 Out-of-order events
+
+### Setup
+
+Send events in an invalid order, for example:
+
+1. `ExpenseApproved` before `ExpenseSubmitted`
+2. Older event version after newer event version
+3. Export event before approval commit
+
+### Expected behavior
+
+- Consumer must not apply an invalid state transition.
+- If prerequisite data is missing, consumer should retry, defer, or mark pending.
+- Older versions should not overwrite newer versions.
+- Final state must be correct.
+
+### Assertions
+
+- No invalid state transition
+- No duplicate ERP export
+- Final expense state is correct
+- Audit log reflects correct order or deferred processing
+
+---
+
+## 4.3 Consumer retry
+
+### Setup
+
+- Consumer encounters a transient failure before side effect.
+- Examples:
+  - Database lock timeout
+  - ERP 500
+  - Redis failure
+  - Kafka consumer rebalance
+
+### Expected behavior
+
+- Consumer retries with backoff.
+- Retry uses the same event ID and idempotency key.
+- Side effect occurs only once.
+
+### Assertions
+
+- ERP export count = 1
+- Database status update count = 1
+- Retry count is bounded
+- No duplicate external transaction ID
+
+---
+
+## 4.4 Consumer crash
+
+### Setup
+
+- Consumer processes event.
+- Consumer crashes before committing offset.
+- Consumer restarts and replays event.
+
+### Expected behavior
+
+- Replay does not duplicate ERP export.
+- Database state remains consistent.
+- Audit trail remains consistent.
+
+### Assertions
+
+- ERP export count = 1
+- External transaction ID count = 1
+- Database EXPORTED transition count = 1
+- Crash recovery log exists
+
+---
+
+## 4.5 Poison message
+
+### Setup
+
+Send malformed events:
+
+- Invalid JSON
+- Missing expense ID
+- Invalid amount
+- Invalid date
+- Unsupported event type
+
+### Expected behavior
+
+- Consumer does not crash the entire consumer group.
+- Invalid event is rejected.
+- Event is sent to dead-letter queue.
+- Alert is generated.
+- No partial ERP export occurs.
+
+### Assertions
+
+- ERP export count = 0 for poison event
+- Dead-letter queue contains event
+- Consumer group remains healthy
+- Alert is triggered
+
+---
+
+## 4.6 Partition failure
+
+### Setup
+
+- Simulate one Kafka partition failure.
+- Consumer group rebalances.
+- Events continue to be produced.
+
+### Expected behavior
+
+- No data loss.
+- No duplicate processing.
+- Consumer recovers.
+- Lag returns to acceptable level.
+
+### Assertions
+
+- All valid events processed
+- ERP export count matches approved expense count
+- No duplicate external transaction IDs
+- Consumer lag recovers
+
+---
+
+## 4.7 Replay
+
+### Setup
+
+- Replay a Kafka topic from a known offset.
+- Include duplicate events and out-of-order events.
+
+### Expected behavior
+
+- Consumer is idempotent.
+- ERP export happens once per approved expense.
+- Database state is consistent.
+- Audit trail is consistent.
+
+### Assertions
+
+- ERP export count = 1 per expense
+- External transaction ID count = 1 per expense
+- Database EXPORTED transition count = 1 per expense
+- Replay does not create duplicate side effects
+
+---
+
+# 5. ERP integration test scenarios
+
+## 5.1 Timeout
+
+### Setup
+
+- Export request times out after 30 seconds.
+- ERP may have accepted the request but response is not received.
+
+### Expected behavior
+
+- Export service retries with the same idempotency key.
+- ERP returns the same external transaction ID.
+- No duplicate ERP transaction is created.
+
+### Assertions
+
+- ERP created transaction count = 1
+- External transaction ID is stable
+- Database status becomes EXPORTED once
+- Retry log exists
+
+---
+
+## 5.2 500 response
+
+### Setup
+
+Two variants:
+
+1. ERP returns 500 before accepting the request.
+2. ERP accepts the request but returns 500 due to internal error.
+
+### Expected behavior
+
+- If ERP did not accept, retry is safe.
+- If ERP accepted but response failed, retry must use idempotency key.
+- ERP must not create a second transaction.
+
+### Assertions
+
+- ERP created transaction count = 1
+- External transaction ID is stable
+- Database status update is consistent
+- Audit log records retry and final state
+
+---
+
+## 5.3 429 response
+
+### Setup
+
+- ERP returns 429 Too Many Requests.
+- Export service retries.
+
+### Expected behavior
+
+- Retry uses backoff.
+- Retry respects rate limits.
+- No retry storm.
+- No duplicate ERP transaction.
+
+### Assertions
+
+- ERP created transaction count = 1
+- Retry count is bounded
+- Backoff is exponential or equivalent
+- ERP load remains acceptable
+
+---
+
+## 5.4 Network failure after ERP accepted the request
+
+### Setup
+
+- Export request is sent.
+- ERP accepts the request.
+- Network fails before response reaches the export service.
+- Export service retries.
+
+### Expected behavior
+
+- Retry uses the same idempotency key.
+- ERP returns the same external transaction ID.
+- No duplicate ERP transaction.
+
+### Assertions
+
+- ERP created transaction count = 1
+- External transaction ID is stable
+- Database status becomes EXPORTED once
+- Reconciliation log exists
+
+---
+
+## 5.5 Duplicate request
+
+### Setup
+
+- Send two ERP requests with the same idempotency key.
+
+### Expected behavior
+
+- ERP treats the second request as a duplicate.
+- ERP returns the same external transaction ID.
+- No second ERP transaction is created.
+
+### Assertions
+
+- ERP created transaction count = 1
+- External transaction ID is identical
+- Database export record count = 1
+- Audit log records one export
+
+---
+
+## 5.6 Partial response
+
+### Setup
+
+- ERP returns a success status but missing external transaction ID.
+- Or ERP returns partial payload.
+
+### Expected behavior
+
+- Export service should not mark expense as EXPORTED until external transaction ID is confirmed.
+- Retry or reconciliation should occur.
+- Alert should be generated.
+
+### Assertions
+
+- Expense status remains EXPORT_PENDING or equivalent
+- No false EXPORTED state
+- Reconciliation job runs
+- Alert is generated
+
+---
+
+## 5.7 ERP outage for 6 hours
+
+### Setup
+
+- ERP is unavailable for 6 hours.
+- Approved expenses accumulate.
+- Export service retries or queues.
+
+### Expected behavior
+
+- No data loss.
+- Export backlog is retained.
+- After ERP recovery, all approved expenses are exported.
+- No duplicate exports.
+- Alerts are generated.
+
+### Assertions
+
+- Backlog count matches approved expenses
+- ERP export count after recovery matches approved expense count
+- No duplicate external transaction IDs
+- Audit trail records outage and recovery
+
+---
+
+## 5.8 Retry storm
+
+### Setup
+
+- ERP outage causes many retries.
+- Multiple consumers or workers retry simultaneously.
+
+### Expected behavior
+
+- Retry behavior is controlled.
+- Exponential backoff and jitter are used.
+- Circuit breaker prevents overload.
+- ERP is not overwhelmed.
+- No duplicate exports.
+
+### Assertions
+
+- ERP request rate remains bounded
+- Retry count is bounded
+- ERP load remains acceptable
+- No duplicate external transaction IDs
+
+---
+
+# 6. Idempotency test design for ERP export
+
+## 6.1 Recommended idempotency key
+
+Use a stable business-level idempotency key, not a per-request UUID.
+
+Recommended key:
+
+```text
+expenseId + ":" + approvedEventId
+```
+
+If the system guarantees one export per expense, a simpler key may be:
+
+```text
+expenseId
+```
+
+However, using `expenseId + approvedEventId` is safer if approval events can be replayed or versioned.
+
+## 6.2 Request generation
+
+Example ERP request:
+
+```json
+{
+  "idempotencyKey": "EXP-1001:APR-2001",
+  "expenseId": "EXP-1001",
+  "amount": 1234.56,
+  "currency": "USD",
+  "transactionDate": "2025-01-15",
+  "vendor": "Vendor A",
+  "tax": 100.00
+}
+```
+
+The idempotency key must remain the same across retries.
+
+## 6.3 Retry behavior
+
+On timeout, 500, 429, or network failure:
+
+- Retry with the same idempotency key.
+- Use exponential backoff.
+- Add jitter.
+- Limit retry attempts.
+- Use circuit breaker if ERP is unavailable.
+- Do not generate a new idempotency key per retry.
+
+## 6.4 Database state
+
+Before ERP call:
+
+- Expense status should be `APPROVED` or `EXPORT_PENDING`.
+- Export record should have a unique idempotency key.
+- Database should prevent duplicate export records.
+
+After ERP success:
+
+- Expense status becomes `EXPORTED`.
+- External transaction ID is stored.
+- Audit log records the transition.
+
+If ERP response is partial:
+
+- Expense should not become `EXPORTED` until external transaction ID is confirmed.
+- A reconciliation job should verify ERP state.
+
+## 6.5 Expected ERP behavior
+
+First request:
+
+- ERP creates one external transaction.
+- ERP returns external transaction ID.
+
+Duplicate request with same idempotency key:
+
+- ERP does not create a second transaction.
+- ERP returns the same external transaction ID.
+- ERP may return 200 or 201 with the same ID, depending on API design.
+
+## 6.6 Assertions
+
+The test should assert:
+
+1. ERP mock created transaction count = 1.
+2. ERP external transaction ID count = 1.
+3. Database export record count = 1.
+4. Expense status is `EXPORTED` exactly once.
+5. Audit log contains exactly one `EXPORTED` transition.
+6. If response is lost, reconciliation finds the existing external transaction ID.
+7. No duplicate external transaction IDs exist.
+
+## 6.7 Recommended architecture comparison
+
+Option A: Client-side idempotency only  
+- Pros: Simple.
+- Cons: Fails if ERP accepts request but response is lost.
+
+Option B: ERP-side idempotency only  
+- Pros: Strong external deduplication.
+- Cons: Depends on ERP API design and ERP reliability.
+
+Option C: Client-side + ERP-side + transactional outbox  
+- Pros: Strongest protection.
+- Cons: More complex.
+
+Recommended: Use a transactional outbox pattern plus stable idempotency key plus ERP-side deduplication.
+
+The outbox pattern helps because database transactions cannot span Kafka and ERP. The database transaction writes the expense state and an outbox event. A relay publishes the outbox event to Kafka. The consumer processes it idempotently. The ERP call uses a stable idempotency key.
+
+---
+
+# 7. Race conditions in approval/export workflow
+
+At least five race conditions are possible.
+
+## 7.1 Two managers approve the same expense concurrently
+
+Two managers read the expense as SUBMITTED and both attempt approval. Without row locking or optimistic concurrency, both may create approval records or publish duplicate approved events.
+
+Prevention:
+
+- Row lock or optimistic locking
+- Unique approval constraint
+- Idempotent approval API
+- Event deduplication
+
+---
+
+## 7.2 Approval and rejection happen concurrently
+
+One manager approves while another rejects. Without state locking, the system may allow an invalid transition or create conflicting audit records.
+
+Prevention:
+
+- State machine validation
+- Row lock
+- Version check
+- Audit log with conflict detection
+
+---
+
+## 7.3 Export consumer and ERP reconciliation update concurrently
+
+The export consumer updates the expense status while a reconciliation job also updates the external transaction ID. Without concurrency control, one update can overwrite the other.
+
+Prevention:
+
+- Optimistic locking
+- Unique export key
+- Single source of truth
+- Idempotent update
+
+---
+
+## 7.4 Duplicate expense submission race
+
+Two users submit the same expense at the same time. Duplicate detection may check the database after both inserts, allowing both to pass.
+
+Prevention:
+
+- Unique constraint on normalized expense fields
+- Row lock during duplicate check
+- Idempotent submission API
+- Post-insert duplicate detection
+
+---
+
+## 7.5 OCR correction and approval race
+
+OCR extracts amount, date, vendor, and tax. If OCR correction happens after approval, the approved amount may be stale. If approval uses stale OCR data, the exported amount may be wrong.
+
+Prevention:
+
+- Versioned expense data
+- Approval validation against latest OCR data
+- Audit log for OCR corrections
+- Re-validation before export
+
+---
+
+## 7.6 Stale cache and database state race
+
+UI or consumer reads a stale Redis cache value while the database has already changed. This can cause duplicate approvals, duplicate exports, or incorrect status display.
+
+Prevention:
+
+- Database as source of truth
+- Cache invalidation
+- Versioned cache keys
+- Consistency checks
+
+---
+
+# 8. Risk-based regression strategy for a 2-week release with 3 QA engineers
+
+## 8.1 Priority definitions
+
+### P0: Must pass before release
+
+P0 tests protect financial correctness, security, and core workflow.
+
+P0 areas:
+
+- Expense state machine
+- Approval rules
+- Rejected expense cannot be approved
+- Employee cannot approve own expense
+- Two-level approval above $5,000
+- ERP export idempotency
+- Duplicate ERP export prevention
+- Receipt file security
+- Authentication and authorization
+- Auditability
+
+### P1: High-risk but not always release-blocking
+
+P1 tests protect reliability, integration, and performance.
+
+P1 areas:
+
+- Kafka duplicate delivery
+- Kafka out-of-order events
+- Consumer crash and replay
+- ERP outage
+- ERP timeout and retry
+- OCR accuracy
+- Exchange-rate correctness
+- Duplicate expense detection
+- Performance under 10,000 users
+- Resilience/recovery
+
+### P2: Important but lower immediate financial risk
+
+P2 areas:
+
+- UI flows
+- Notifications
+- Search correctness
+- Cache consistency
+- API error handling
+- Mobile app behavior
+- Non-critical integration edge cases
+
+### P3: Lower-risk or cosmetic
+
+P3 areas:
+
+- UI polish
+- Accessibility
+- Minor validation messages
+- Non-critical edge cases
+- Cosmetic status display
+
+---
+
+## 8.2 Allocation of 3 QA engineers
+
+### QA Engineer 1: Core business and ERP idempotency
+
+Focus:
+
+- P0 functional tests
+- Approval workflow
+- State machine
+- ERP idempotency
+- Duplicate export regression
+- Auditability
+
+### QA Engineer 2: Event-driven, resilience, and performance
+
+Focus:
+
+- Kafka duplicate/out-of-order
+- Consumer crash
+- Poison message
+- Partition failure
+- ERP outage
+- Retry storm
+- Load testing
+- Chaos testing
+
+### QA Engineer 3: Security, database, UI, and integration
+
+Focus:
+
+- Authentication and authorization
+- File security
+- Database concurrency
+- UI flows
+- Notifications
+- Search/cache
+- Integration smoke tests
+
+---
+
+## 8.3 Two-week release plan
+
+### Week 1
+
+Day 1-2:
+
+- Set up staging environment.
+- Build automated P0 tests.
+- Build ERP mock.
+- Build Kafka test harness.
+- Start defect investigation for duplicate ERP export.
+
+Day 3-5:
+
+- Run P0 regression every build.
+- Run P1 nightly tests.
+- Investigate duplicate ERP export root causes.
+- Add idempotency regression tests.
+- Add chaos tests for Kafka and ERP.
+
+### Week 2
+
+Day 1-3:
+
+- Run P2 tests.
+- Run performance tests.
+- Run resilience/recovery tests.
+- Validate auditability.
+- Fix P0/P1 defects.
+
+Day 4-5:
+
+- Run release candidate.
+- Run zero-downtime deployment validation.
+- Run rollback validation.
+- Final sign-off.
+
+---
+
+## 8.4 Release decision rules
+
+Release should be blocked if any P0 test fails.
+
+Release should be delayed if any P1 test fails and the risk is material.
+
+P2 failures should be accepted only with documented risk acceptance.
+
+P3 failures should not block release unless they indicate a deeper P0/P1 issue.
+
+---
+
+# 9. Quality gates for CI/CD
+
+## 9.1 On every pull request
+
+Run fast, low-cost tests:
+
+- Build
+- Unit tests
+- API contract tests
+- Static analysis
+- Security scan
+- Lint
+- Basic UI smoke test
+- Basic auth test
+- Basic API validation
+- Basic Kafka producer/consumer unit test if cheap
+
+Exit criteria:
+
+- Build succeeds
+- Unit tests pass
+- No critical security findings
+- API contract tests pass
+- No obvious state-machine violations
+
+---
+
+## 9.2 On merge
+
+Run broader integration tests:
+
+- Full API integration tests
+- State machine tests
+- Approval workflow tests
+- ERP mock idempotency tests
+- Kafka duplicate delivery test
+- Kafka out-of-order test
+- Database migration tests
+- Security tests
+- Auditability tests
+- Performance smoke test
+
+Exit criteria:
+
+- P0 tests pass
+- ERP idempotency test passes
+- Kafka duplicate test passes
+- State machine tests pass
+- Security tests pass
+- Audit log tests pass
+
+---
+
+## 9.3 Nightly
+
+Run full regression and chaos tests:
+
+- Full end-to-end workflow
+- Kafka duplicate/out-of-order/replay
+- Consumer crash recovery
+- Poison message handling
+- Partition failure recovery
+- ERP outage simulation
+- ERP timeout and retry
+- Retry storm control
+- Load test
+- OCR accuracy sample
+- Audit reconciliation
+- Data consistency checks
+
+Exit criteria:
+
+- No P0/P1 failures
+- Kafka consumer lag acceptable
+- ERP mock duplicate count = 0
+- Audit trail complete
+- Performance within thresholds
+
+---
+
+## 9.4 Before production deployment
+
+Run release-candidate gates:
+
+- All P0 tests
+- All P1 tests
+- Performance test at 10,000 concurrent users
+- Resilience/recovery tests
+- Security tests
+- Auditability tests
+- Zero-downtime deployment test
+- Rollback test
+- Data migration validation
+- ERP idempotency regression
+- Duplicate ERP export regression
+- Canary or staged rollout validation
+
+Exit criteria:
+
+- P0 and P1 pass
+- Performance meets targets
+- No unresolved duplicate export risk
+- Audit trail complete
+- Rollback is safe
+- Deployment is zero-downtime or acceptable with documented risk
+
+---
+
+# 10. Fifteen high-value test cases
+
+| ID | Scenario | Priority | Test Type | Expected Result |
+|---|---|---:|---|---|
+| TC-01 | Expense above $5,000 requires two-level approval | P0 | Functional/API | Expense remains pending until two distinct authorized managers approve; no export occurs before both approvals. |
+| TC-02 | Employee cannot approve their own expense | P0 | Security/API | Approval attempt returns 403/409; no state change; audit log records denied attempt. |
+| TC-03 | Rejected expense cannot be approved | P0 | State/API | Approval attempt fails; status remains REJECTED; audit log records invalid transition attempt. |
+| TC-04 | Duplicate expense detection | P0 | Functional | Duplicate expense is blocked or flagged; no duplicate export occurs. |
+| TC-05 | Duplicate ERP export via duplicate Kafka event | P0 | Integration/Kafka | ERP receives one transaction; external transaction ID is unique; database shows one EXPORTED record. |
+| TC-06 | Kafka duplicate delivery of approved event | P0 | Event | Consumer processes event once; ERP export happens once; audit log records one transition. |
+| TC-07 | Out-of-order Kafka events | P1 | Event | Consumer does not apply invalid state; stale or premature events are deferred, ignored, or retried; final state is correct. |
+| TC-08 | ERP timeout after request accepted | P1 | Integration | Retry uses same idempotency key; ERP returns same external transaction ID; no duplicate ERP transaction. |
+| TC-09 | ERP outage for 6 hours | P1 | Resilience | Export backlog is retained; no data loss; exports occur after recovery; alerts are generated; no duplicates. |
+| TC-10 | Consumer crash and replay | P1 | Event | Replay does not duplicate ERP export; database state remains consistent; audit trail remains consistent. |
+| TC-11 | Poison message in Kafka | P1 | Event | Malformed event goes to dead-letter queue; consumer group does not crash; no partial ERP export occurs. |
+| TC-12 | Receipt file must not be publicly accessible | P0 | Security | Unauthenticated access returns 403; no public URL; only authorized users can retrieve receipt. |
+| TC-13 | OCR accuracy and exchange-rate correctness | P1 | Functional | OCR extracts amount, date, vendor, and tax; amount is converted using exchange rate applicable on transaction date; corrections are audited. |
+| TC-14 | 10,000 concurrent users performance | P1 | Performance | API p95 latency is within 30 seconds; Kafka, database, and ERP throughput remain acceptable; no degradation. |
+| TC-15 | Auditability of state transitions | P0 | Audit | Every state transition is logged with actor, timestamp, event ID, trace ID, previous state, and new state. |
+
+---
+
+# 11. Automation pseudocode for detecting duplicate ERP export
+
+Below is Java-style pseudocode for a test that detects duplicate ERP export caused by duplicate Kafka delivery.
+
+```java
+@Test
+void duplicateApprovedEventShouldProduceOneErpExport() {
+    // 1. Create expense
+    Expense expense = expenseService.createExpense(
+        "EXP-1001",
+        1234.56,
+        "USD",
+        "2025-01-15",
+        "Vendor A",
+        100.00
+    );
+
+    // 2. Approve expense
+    expenseService.approve(expense.getId(), "manager-1");
+
+    // 3. Build stable idempotency key
+    String eventId = "APR-2001";
+    String idempotencyKey = expense.getId() + ":" + eventId;
+
+    // 4. Publish duplicate approved event
+    ExpenseApprovedEvent payload = new ExpenseApprovedEvent(
+        expense.getId(),
+        eventId,
+        idempotencyKey,
+        expense.getAmount(),
+        expense.getCurrency(),
+        expense.getTransactionDate(),
+        expense.getVendor(),
+        expense.getTax()
+    );
+
+    kafkaProducer.send("expense.approved", expense.getId(), eventId, payload);
+    kafkaProducer.send("expense.approved", expense.getId(), eventId, payload);
+
+    // 5. Start consumer
+    exportConsumer.start();
+
+    // 6. Wait for processing
+    awaitConsumerProcessed(eventId);
+
+    // 7. Assert ERP received only one export
+    List<ErpCall> erpCalls = erpMock.getCalls();
+    assertThat(erpCalls.size()).isEqualTo(1);
+
+    // 8. Assert ERP created only one external transaction
+    List<String> externalIds = erpCalls.stream()
+        .map(ErpCall::getExternalTransactionId)
+        .toList();
+    assertThat(new HashSet<>(externalIds).size()).isEqualTo(1);
+
+    // 9. Assert database status is EXPORTED once
+    Expense dbExpense = expenseRepository.findById(expense.getId());
+    assertThat(dbExpense.getStatus()).isEqualTo(ExpenseStatus.EXPORTED);
+    assertThat(dbExpense.getExternalTransactionId()).isNotNull();
+
+    // 10. Assert export record exists once
+    assertThat(exportRepository.countByExpenseId(expense.getId())).isEqualTo(1);
+
+    // 11. Assert audit log records one EXPORTED transition
+    assertThat(auditRepository.countTransitions(
+        expense.getId(),
+        ExpenseStatus.EXPORTED
+    )).isEqualTo(1);
+}
+```
+
+A supporting mock ERP could be:
+
+```java
+class MockErp {
+    private final Map<String, String> externalIds = new HashMap<>();
+
+    ErpResponse export(ErpRequest request) {
+        String key = request.getIdempotencyKey();
+
+        if (externalIds.containsKey(key)) {
+            return new ErpResponse(externalIds.get(key));
+        }
+
+        String externalId = "ERP-" + UUID.randomUUID();
+        externalIds.put(key, externalId);
+        return new ErpResponse(externalId);
+    }
+
+    List<ErpCall> getCalls() {
+        return callLog;
+    }
+}
+```
+
+This test detects the reported defect by asserting that duplicate Kafka delivery does not produce duplicate ERP exports.
+
+---
+
+# 12. Challenge the QA strategy: five assumptions and failure modes
+
+## Assumption 1: ERP can enforce idempotency using a stable key
+
+### Assumption
+
+The ERP API can accept a stable idempotency key and return the same external transaction ID for duplicate requests.
+
+### What could go wrong if false
+
+If the ERP does not support idempotency or uses a per-request identifier, retries after timeout or network failure can create duplicate ERP transactions. The application may still show only one EXPORTED record, but the ERP will have two.
+
+Mitigation:
+
+- Require ERP-side deduplication.
+- Use reconciliation jobs.
+- Store all external transaction IDs.
+- Alert on multiple external IDs for one expense.
+- Manually reconcile duplicates.
+
+---
+
+## Assumption 2: Kafka consumer can be made idempotent using event ID and database constraints
+
+### Assumption
+
+The consumer can safely process duplicate events by checking event ID, expense ID, and database state.
+
+### What could go wrong if false
+
+If the consumer performs side effects before checking database state, or if database constraints are missing, duplicate events can still cause duplicate ERP exports.
+
+Mitigation:
+
+- Use transactional outbox.
+- Use row locking or optimistic concurrency.
+- Use unique export idempotency key.
+- Validate state before side effect.
+- Test crash recovery and replay.
+
+---
+
+## Assumption 3: OCR accuracy of 95% is acceptable with manual correction
+
+### Assumption
+
+OCR errors can be detected and corrected by users or managers.
+
+### What could go wrong if false
+
+If OCR errors are not caught, incorrect amount, date, vendor, or tax values can be approved and exported. Financial records may be wrong.
+
+Mitigation:
+
+- Use golden-file OCR accuracy tests.
+- Require manual review for high-value expenses.
+- Validate amount/date/vendor/tax before approval.
+- Audit OCR corrections.
+- Reconcile exported amounts with ERP records.
+
+---
+
+## Assumption 4: Three QA engineers can cover the required risk-based regression in two weeks
+
+### Assumption
+
+The team can build and maintain enough automation to cover P0/P1 risks within the release cycle.
+
+### What could go wrong if false
+
+If automation is insufficient, P0/P1 risks may escape to production. Duplicate ERP export, state corruption, or security issues may occur.
+
+Mitigation:
+
+- Shift testing left.
+- Automate P0 tests.
+- Use nightly chaos and integration tests.
+- Prioritize defect investigation.
+- Accept documented risk only for P2/P3.
+- Add production monitoring and alerting.
+
+---
+
+## Assumption 5: Zero-downtime deployment and data migration are safe
+
+### Assumption
+
+Deployment and migration can occur without downtime and without corrupting expense state, Kafka events, or ERP exports.
+
+### What could go wrong if false
+
+A failed migration or deployment can leave expenses in inconsistent states, duplicate events in Kafka, or ERP exports out of sync with database status.
+
+Mitigation:
+
+- Test rollback.
+- Use canary deployment.
+- Validate data migration.
+- Reconcile Kafka and ERP after deployment.
+- Feature-flag risky changes.
+- Monitor audit trail after deployment.
