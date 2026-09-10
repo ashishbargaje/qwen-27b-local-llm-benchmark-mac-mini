@@ -4,6 +4,7 @@ import csv
 def get_llm_response(prompt):
     response = ollama.chat(
         model="hf.co/ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF:IQ2_XS",
+        # model="qwen3.8:27b-mlx",
         messages=[
             {
                 # overall rules / persona / behavior
@@ -14,9 +15,9 @@ def get_llm_response(prompt):
                 # current specific task         
                 "role": "user",
                 "content": prompt,
-                # "images": [
-                #     f"images/image_{image:02d}.png" for image in range(1, 12)
-                # ]
+                "images": [
+                    f"images/image_{image:02d}.png" for image in range(1, 12)
+                ]
             }
         ],
         options={"temperature": 0.0}, #temperature=0.0 for deterministic output (0 randomness) and temperature=1.0 for more creative output
