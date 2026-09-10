@@ -6,10 +6,10 @@ This experiment evaluated a **27B parameter LLM on a Mac mini M4 with 24GB unifi
 
 ```text
 Model quantization : IQ2_XS (2-bit)
-Context            : 64K
-KV cache           : Q8_0
-KV cache size      : ~2.125 GB
-Runtime            : Ollama
+Context            : 65K
+Primary KV cache   : Q8_0
+Latest KV cache    : Q4_0
+Runtime             : Ollama
 ```
 
 Two practical workloads were tested:
@@ -17,9 +17,21 @@ Two practical workloads were tested:
 1. Complex QA strategy generation
 2. Image understanding across 10 deliberately difficult chart examples
 
-The final configuration achieved approximately **6.67 tok/s on the QA workload** and **7.11 tok/s on the image workload**.
+The baseline Q8_0 configuration achieved approximately **6.67 tok/s on the QA workload** and **7.11 tok/s on the image workload**.
 
-The most important optimization was the KV-cache change from **F16 to Q8_0**, reducing the observed KV footprint from **4.0 GB to 2.125 GB** while keeping measured QA generation speed essentially unchanged.
+The key optimization path was:
+
+```text
+F16 KV
+   ↓
+Q8_0 KV
+   ↓
+Q4_0 KV
+```
+
+The F16 → Q8_0 change reduced the observed KV footprint from **4.0 GB to 2.125 GB** while keeping measured QA generation speed essentially unchanged.
+
+The later Q8_0 → Q4_0 experiment reduced the loaded runtime size by approximately **1 GB**, with measured throughput changing from **6.67 tok/s to 6.57 tok/s**.
 
 ---
 
@@ -100,26 +112,55 @@ Measured generation speed changed from:
 6.68 tok/s → 6.67 tok/s
 ```
 
-That is a difference of only about:
+That is a difference of about:
 
 ```text
 0.01 tok/s
 ≈ 0.15%
 ```
 
-For this particular workload, that is effectively negligible.
+For this particular workload, that observed difference was effectively negligible.
 
-### Decision
+### Baseline Decision
 
-This makes **Q8_0 KV** a strong practical choice for this 24GB system:
+This made **Q8_0 KV** a strong baseline for the 24GB system:
 
-> nearly half the KV memory with essentially the same measured generation speed in the QA run.
+> Nearly half the KV memory with essentially the same measured generation speed in the QA run.
 
 ---
 
-## 3. Test 1 — Complex QA Strategy
+## 3. Q8_0 → Q4_0 KV Optimization
 
-### Raw benchmark
+The next optimization step evaluated whether the KV cache could be reduced further.
+
+| Metric | Q8_0 KV | Q4_0 KV |
+|---|---:|---:|
+| Context | 65K | 65K |
+| Loaded runtime size | ~11 GB | **~10 GB** |
+| Generated tokens | 28,250 | 24,948 |
+| Evaluation time | 4,238.26 s | 3,797.16 s |
+| Tokens/sec. | **6.67** | 6.57 |
+| Memory | Higher | **~1 GB less** |
+| Output quality | Slightly better | Very close |
+
+The measured throughput difference is approximately:
+
+```text
+6.67 tok/s → 6.57 tok/s
+≈ 1.5%
+```
+
+The two runs did not use identical prompt-token and generated-token counts, so this should be treated as an **observed engineering comparison**, not a perfectly controlled benchmark.
+
+### Latest Practical Decision
+
+For this 24GB Mac setup, **Q4_0 KV is the more practical configuration when additional memory headroom is more valuable than a small throughput difference**.
+
+---
+
+## 4. Test 1 — Complex QA Strategy
+
+### Q8_0 baseline
 
 ```text
 Prompt tokens       : 1,124
@@ -135,23 +176,30 @@ Approximate wall-clock generation time:
 ≈ 70.6 minutes
 ```
 
-### What this test demonstrates
+### Q4_0 optimization run
+
+```text
+Prompt tokens       : 4,295
+Generated tokens    : 24,948
+Evaluation duration : 3,797.16 seconds
+Tokens / second     : 6.57
+```
 
 This was a sustained long-form generation workload rather than a short chat interaction.
 
 The useful signals are:
 
 - the model remained operational for a very long generation
-- roughly **28K output tokens** were produced
-- generation speed stayed around **6.67 tok/s**
-- the 64K context configuration remained in use
+- thousands of output tokens were produced
+- generation speed stayed around the measured range above
+- the 65K context configuration remained in use
 - the system remained in the observed no-swap states
 
 For QA architecture experiments, this is more representative of sustained reasoning workloads than a short 100-token benchmark.
 
 ---
 
-## 4. Test 2 — Image Understanding
+## 5. Test 2 — Image Understanding
 
 ### Raw benchmark
 
@@ -195,11 +243,11 @@ The generated analysis reported:
 - legends
 - the intentional visual quirks in the test set
 
-This is especially useful because the test was not limited to a clean, single chart. It intentionally included cases that tend to challenge visual parsing.
+This is useful because the test was not limited to a clean, single chart. It intentionally included cases that can challenge visual parsing.
 
 ---
 
-## 5. Before / Peak / After Memory Story
+## 6. Before / Peak / After Memory Story
 
 The memory snapshots create a useful progression.
 
@@ -241,30 +289,27 @@ This supports the conclusion that the large memory footprint was tied to the act
 
 ---
 
-## 6. Why the Final Configuration Makes Sense
+## 7. Why the Current Configuration Makes Sense
 
 ### IQ2_XS for the model
 
 The 27B model needs aggressive model quantization to make a 24GB machine practical.
 
-### 64K context
+### 65K context
 
 The experiment intentionally retained a large context window because long-context behaviour was part of the objective.
 
-### Q8_0 KV
+### Q8_0 as baseline
 
-This was the key memory optimisation:
+Q8_0 significantly reduced KV memory compared with F16 with essentially unchanged measured QA generation speed in the original comparison.
 
-```text
-F16 KV  = 4.0 GB
-Q8_0 KV = 2.125 GB
-```
+### Q4_0 as the latest optimization
 
-The speed result did not materially change in the measured QA run.
+Q4_0 reduced the loaded runtime size by approximately **1 GB** versus Q8_0, with approximately **1.5% lower measured throughput** in the observed comparison.
 
 ### Overall balance
 
-The final configuration therefore prioritises:
+The current practical target therefore prioritises:
 
 ```text
 Large model
@@ -277,7 +322,7 @@ rather than maximising any single metric.
 
 ---
 
-## 7. Engineering Takeaways
+## 8. Engineering Takeaways
 
 ### Takeaway 1 — Memory is a first-class tuning dimension
 
@@ -305,9 +350,13 @@ The experiment also tracked:
 
 A short prompt benchmark can look great while a long-running architecture or test-strategy workload behaves very differently.
 
+### Takeaway 5 — Optimizations should be evaluated as trade-offs
+
+Q8_0 and Q4_0 show that reducing memory can be worthwhile even when it introduces a small throughput trade-off.
+
 ---
 
-## 8. What This Means for QA Architecture
+## 9. What This Means for QA Architecture
 
 From a QA Architect perspective, the interesting question is not:
 
@@ -333,7 +382,7 @@ The next step is to move from isolated capability tests toward repeatable evalua
 
 ---
 
-## 9. Limitations
+## 10. Limitations
 
 These numbers should be treated as practical observations, not universal benchmarks.
 
@@ -350,26 +399,86 @@ Results can change with:
 
 Most importantly, **throughput alone does not establish output quality**.
 
-A future benchmark should score the generated answer for correctness, completeness, hallucination rate, reasoning quality and task success in addition to tokens/sec.
+The Q8_0 and Q4_0 runs also used different prompt-token and generated-token counts, so their total evaluation durations should not be treated as directly comparable.
+
+A future benchmark should score generated answers for correctness, completeness, hallucination rate, reasoning quality and task success in addition to tokens/sec.
+
+---
+
+## 11. Latest Practical Configuration
+
+For the tested 24GB system, the latest practical configuration is:
+
+```text
+Hardware           : Mac mini M4
+Unified Memory     : 24 GB
+
+Model              : Qwen3.8-27B
+Model Quantization : IQ2_XS (2-bit)
+
+Context            : 65K
+KV Cache           : Q4_0
+
+Runtime            : Ollama
+```
+
+Q8_0 remains a useful baseline and alternative when the priority is maximum KV-cache precision rather than additional memory headroom.
+
+---
+
+## 12. Reproducibility
+
+The repository keeps the important experimental artefacts together:
+
+- test code
+- prompts
+- raw logs
+- generated output
+- screenshots
+- configuration notes
+- comparison results
+
+For an apples-to-apples comparison, keep the following constant:
+
+```text
+Model version
+Model quantization
+Context length
+KV cache type
+Prompt
+Hardware
+Runtime
+```
+
+Small runtime changes can affect memory and throughput.
 
 ---
 
 ## Final Result
 
-For the tested workloads, the configuration:
+The experiment demonstrates that a **27B local LLM can be pushed into a practically interesting operating range on a 24GB Apple Silicon system** through careful memory and runtime engineering.
+
+The progression was:
 
 ```text
-27B
-IQ2_XS
-64K context
-Q8_0 KV
-24GB M4
+27B IQ2_XS
+     ↓
+65K context
+     ↓
+Q8_0 KV baseline
+     ↓
+Q4_0 KV optimization
+     ↓
+~1 GB lower loaded runtime size
+with ~1.5% measured throughput trade-off
 ```
 
-proved that a large local model can be pushed into a practically interesting operating range on consumer hardware.
+The core engineering result is:
 
-The most compelling result is the KV-cache optimisation:
+> **Q4_0 provided additional memory headroom on the 24GB system while retaining similar measured QA throughput and very close observed output quality.**
 
-> **~46.9% less KV memory with essentially unchanged measured QA generation speed.**
+The broader lesson is:
 
-That is the core engineering result of this experiment.
+> **Careful memory engineering, workload testing and evidence-based trade-offs can move the boundary between "too large to run" and "practical enough to use."**
+
+This is particularly relevant to local AI-assisted software engineering, QA and agentic workflows where privacy, control and predictable local execution matter.
